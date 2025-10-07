@@ -8,7 +8,7 @@ app = FastAPI()
 model = joblib.load("modele_stars.pkl")
 tfidf = joblib.load("tfidf_vectorizer.pkl")
 
-@app.post("/api/predic")
+@app.post("/api/predict")
 async def predict(request: Request):
     data = await request.json()
 
