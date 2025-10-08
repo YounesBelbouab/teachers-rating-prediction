@@ -22,7 +22,7 @@ async def predict(request: Request):
     # Description principale
     rows.append({
         "id": user_id,
-        "source": "main",
+        "source": "base",
         "description": data.get("description", ""),
         "numberOfStars": np.nan
     })
