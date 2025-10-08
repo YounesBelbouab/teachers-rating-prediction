@@ -127,6 +127,7 @@ def remplacer_nan_par_inconnu(df, colonne=None):
 @app.post("/api/predict")
 async def predict(request: Request):
     data = await request.json()
+    logging.info(f"📩 Données reçues : {data}")
     user_id = data.get("id", "temp")
 
     # === Nettoyage de base des valeurs ===
@@ -243,7 +244,7 @@ async def predict(request: Request):
     df_all = df_all.merge(df_features, on="id", how="left")
 
     # Text processing
-    text_cols = ['description', 'title', 'company', 'institution']
+    text_cols = ['description', 'company']
 
     df_filtered = df_all.dropna(subset=['numberOfStars']).copy()
 
