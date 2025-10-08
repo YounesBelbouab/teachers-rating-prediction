@@ -10,6 +10,24 @@ from dateutil import parser
 from dateutil.relativedelta import relativedelta
 from scipy import sparse
 from scipy.sparse import hstack
+import matplotlib.pyplot as plt
+import seaborn as sns
+import sklearn
+import warnings
+
+from sklearn.preprocessing import LabelEncoder
+from sklearn.impute import KNNImputer
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import f1_score
+from sklearn.model_selection import cross_val_score
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import GridSearchCV
+from sklearn.metrics import mean_squared_error
+from scipy.sparse import hstack
+from xgboost import XGBRegressor
 
 app = FastAPI()
 
@@ -243,21 +261,22 @@ async def predict(request: Request):
     df_all = df_all.merge(df_features, on="id", how="left")
 
     # Text processing
-    text_cols = ['firstname', 'lastname', 'city', 'description', 'title',
-                 'company', 'level', 'institution', 'course_level']
-    df_all[text_cols] = df_all[text_cols].fillna('')
+    text_cols = ['description', 'title', 'company', 'institution']
 
-    for col in text_cols:
-        df_all[col] = df_all[col].apply(nettoyer_texte)
+    df_filtered = df_all.dropna(subset=['numberOfStars']).copy()
 
-    text_combined = df_all[text_cols].agg(' '.join, axis=1).iloc[0]
-    X_text = tfidf.transform([text_combined])
+    df_filtered['duration'] = pd.to_numeric(df_filtered['duration'], errors='coerce').fillna(0)
 
-    # Numerical features
-    num_cols = ['duration', 'nombre_experiences', 'nb_cours', 'moyenne_notes', 'score_reputation']
-    df_all[num_cols] = df_all[num_cols].fillna(0)
-    X_num = sparse.csr_matrix(df_all[num_cols].iloc[0].values.reshape(1, -1))
+    X_text_raw = df_filtered[text_cols].fillna('').agg(' '.join, axis=1)
+
+    tfidf = TfidfVectorizer()
+    X_text = tfidf.fit_transform(X_text_raw)
+
+    X_num = df_filtered[['duration', 'nombre_experiences', 'nb_cours', 'moyenne_notes', 'score_reputation']]
     X_final = hstack([X_text, X_num])
+
+    X = X_final
+    y = df_filtered['numberOfStars']
 
     # Make prediction
     prediction = model.predict(X_final)[0]
