@@ -247,11 +247,12 @@ async def predict(request: Request):
     X_text = tfidf.transform([text_input])
 
     features_row = df_all[df_all["id"] == user_id].iloc[0]
-    X_num_array = np.array([[features_row['duration'],
-                             features_row['nombre_experiences'],
-                             features_row['nb_cours'],
-                             features_row['moyenne_notes'],
-                             features_row['score_reputation']]])
+    X_num_array = np.array([[float(features_row['duration']),
+                             float(features_row['nombre_experiences']),
+                             float(features_row['nb_cours']),
+                             float(features_row['moyenne_notes']),
+                             float(features_row['score_reputation'])]])
+
     X_num = csr_matrix(X_num_array)
 
     X_final = hstack([X_text, X_num])
