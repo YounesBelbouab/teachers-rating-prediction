@@ -5,8 +5,8 @@ import pandas as pd
 app = FastAPI()
 
 # Charger le modèle et le vectorizer
-model = joblib.load("modele_stars.pkl")
-tfidf = joblib.load("tfidf_vectorizer.pkl")
+model = joblib.load("modele_stars(1).pkl")
+tfidf = joblib.load("tfidf_vectorizer(1).pkl")
 
 @app.post("/api/predict")
 async def predict(request: Request):
