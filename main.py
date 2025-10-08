@@ -3,15 +3,13 @@ import joblib
 import pandas as pd
 import numpy as np
 import json
-import logging
 import re
 import unicodedata
 from datetime import datetime
 from dateutil import parser
 from dateutil.relativedelta import relativedelta
 from sklearn.feature_extraction.text import TfidfVectorizer
-from scipy.sparse import hstack
-from xgboost import XGBRegressor
+from scipy.sparse import hstack, csr_matrix
 
 app = FastAPI()
 
@@ -129,7 +127,6 @@ def remplacer_nan_par_inconnu(df, colonne=None):
 @app.post("/api/predict")
 async def predict(request: Request):
     data = await request.json()
-    logging.info(f"📩 Données reçues : {data}")
     user_id = data.get("id", "temp")
 
     # === Nettoyage de base des valeurs ===
@@ -245,23 +242,19 @@ async def predict(request: Request):
     df_features["score_reputation"] = df_features["score_reputation"].round(2)
     df_all = df_all.merge(df_features, on="id", how="left")
 
-    # Text processing
-    text_cols = ['description', 'company']
+    text_input = \
+    df_all[df_all["id"] == user_id][['description', 'company']].fillna('').astype(str).agg(' '.join, axis=1).iloc[0]
+    X_text = tfidf.transform([text_input])
 
-    df_filtered = df_all.dropna(subset=['numberOfStars']).copy()
+    features_row = df_all[df_all["id"] == user_id].iloc[0]
+    X_num_array = np.array([[features_row['duration'],
+                             features_row['nombre_experiences'],
+                             features_row['nb_cours'],
+                             features_row['moyenne_notes'],
+                             features_row['score_reputation']]])
+    X_num = csr_matrix(X_num_array)
 
-    df_filtered['duration'] = pd.to_numeric(df_filtered['duration'], errors='coerce').fillna(0)
-
-    X_text_raw = df_filtered[text_cols].fillna('').astype(str).agg(' '.join, axis=1)
-
-    tfidf = TfidfVectorizer()
-    X_text = tfidf.fit_transform(X_text_raw)
-
-    X_num = df_filtered[['duration', 'nombre_experiences', 'nb_cours', 'moyenne_notes', 'score_reputation']]
     X_final = hstack([X_text, X_num])
-
-    X = X_final
-    y = df_filtered['numberOfStars']
 
     # Make prediction
     prediction = model.predict(X_final)[0]
