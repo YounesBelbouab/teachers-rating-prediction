@@ -16,6 +16,7 @@ app = FastAPI()
 model = joblib.load("modele_stars(1).pkl")
 tfidf = joblib.load("tfidf_vectorizer(1).pkl")
 
+
 def nettoyer_texte(texte):
     if not isinstance(texte, str):
         return "Inconnu"
@@ -24,6 +25,7 @@ def nettoyer_texte(texte):
     texte = re.sub(r'[^a-z0-9\s]', ' ', texte)
     texte = re.sub(r'\s+', ' ', texte).strip()
     return texte if texte else "inconnu"
+
 
 def convert_duration_to_months(text):
     if pd.isna(text) or str(text).strip() == "" or text == "Inconnu":
@@ -68,6 +70,7 @@ def convert_duration_to_months(text):
         return 12
     return np.nan
 
+
 def rename_year_columns(df):
     new_columns = {}
     for col in df.columns:
@@ -75,9 +78,16 @@ def rename_year_columns(df):
             new_columns[col] = col.lower().replace('year', 'years')
     return df.rename(columns=new_columns)
 
+
 def calculate_duration_in_months(df):
+    # Ensure columns exist before processing
+    if "start_date" not in df.columns:
+        df["start_date"] = "Inconnu"
+    if "end_date" not in df.columns:
+        df["end_date"] = "Inconnu"
+
     def safe_parse_date(date_str):
-        if pd.isna(date_str) or str(date_str).strip() == "":
+        if pd.isna(date_str) or str(date_str).strip() == "" or str(date_str) == "Inconnu":
             return None
         text = str(date_str).lower().strip()
         if "present" in text or "présent" in text:
@@ -86,18 +96,22 @@ def calculate_duration_in_months(df):
             return parser.parse(text, fuzzy=True, dayfirst=True)
         except Exception:
             return None
+
     df["start_date_parsed"] = df["start_date"].apply(safe_parse_date)
     df["end_date_parsed"] = df["end_date"].apply(safe_parse_date)
+
     def compute_months(row):
         if pd.isna(row["start_date_parsed"]) or pd.isna(row["end_date_parsed"]):
             return np.nan
         diff = relativedelta(row["end_date_parsed"], row["start_date_parsed"])
         total_months = diff.years * 12 + diff.months
         return max(total_months, 0)
+
     df["duration"] = df.apply(compute_months, axis=1)
     df = df.drop(columns=["start_date", "end_date", "start_date_parsed", "end_date_parsed"])
     df["duration"] = df["duration"].fillna(0).astype(int)
     return df
+
 
 def remplacer_nan_par_inconnu(df, colonne=None):
     if colonne is None or colonne not in df.columns:
@@ -108,6 +122,7 @@ def remplacer_nan_par_inconnu(df, colonne=None):
         df[colonne] = df[colonne].fillna("Inconnu")
         df[colonne] = df[colonne].replace("", "Inconnu")
     return df
+
 
 @app.post("/api/predict")
 async def predict(request: Request):
@@ -177,6 +192,7 @@ async def predict(request: Request):
     df_dip = pd.DataFrame(dip_rows)
     df_course = pd.DataFrame(course_rows)
 
+    # Process experiences
     if "duration" not in df_exp.columns:
         df_exp["duration"] = "Inconnu"
 
@@ -187,29 +203,30 @@ async def predict(request: Request):
         if col not in df_exp.columns:
             df_exp[col] = "Inconnu"
         df_exp[col] = df_exp[col].fillna("Inconnu")
+
     df_exp = df_exp.dropna(subset=["duration"])
     df_exp["duration"] = df_exp["duration"].fillna(0).astype(int)
-    df_exp["description"] = df_exp["description"].fillna("Inconnu")
-    df_exp["city"] = df_exp["city"].fillna("Inconnu")
-    df_exp["company"] = df_exp["company"].fillna("Inconnu")
 
+    # Process diplomas
     df_dip = remplacer_nan_par_inconnu(df_dip, "institution")
-    df_course = rename_year_columns(df_course)
-    for col in ["start_date", "end_date"]:
-        if col not in df_course.columns:
-            df_course[col] = "Inconnu"
 
-    df_course = calculate_duration_in_months(df_course)
+    # Process courses
+    df_course = rename_year_columns(df_course)
+
+    # Calculate duration only once
     df_course = calculate_duration_in_months(df_course)
     df_course = remplacer_nan_par_inconnu(df_course, "duration")
 
+    # Combine all dataframes
     df_all = pd.concat([df_base, df_exp, df_dip, df_course], ignore_index=True, sort=False).fillna("Inconnu")
 
     df_all["numberOfStars"] = pd.to_numeric(df_all.get("numberOfStars", np.nan), errors="coerce")
 
+    # Calculate features
     nombre_exp = df_all[df_all["source"] == "experience"].groupby("id").size().rename("nombre_experiences")
     nb_cours = df_all[df_all["source"] == "pastcourse"].groupby("id").size().rename("nb_cours")
-    moyenne_notes = df_all[df_all["source"] == "pastcourse"].groupby("id")["numberOfStars"].mean().rename("moyenne_notes")
+    moyenne_notes = df_all[df_all["source"] == "pastcourse"].groupby("id")["numberOfStars"].mean().rename(
+        "moyenne_notes")
 
     df_features = pd.concat([nombre_exp, nb_cours, moyenne_notes], axis=1).fillna(0)
 
@@ -218,13 +235,14 @@ async def predict(request: Request):
     max_cours = max(df_features["nb_cours"].max(), 1)
 
     df_features["score_reputation"] = (
-        (coef_exp * (df_features["nombre_experiences"] / max_exp)) +
-        (coef_cours * (df_features["nb_cours"] / max_cours)) +
-        (coef_stars * (df_features["moyenne_notes"] / 5))
-    ) * 100
+                                              (coef_exp * (df_features["nombre_experiences"] / max_exp)) +
+                                              (coef_cours * (df_features["nb_cours"] / max_cours)) +
+                                              (coef_stars * (df_features["moyenne_notes"] / 5))
+                                      ) * 100
     df_features["score_reputation"] = df_features["score_reputation"].round(2)
     df_all = df_all.merge(df_features, on="id", how="left")
 
+    # Text processing
     text_cols = ['firstname', 'lastname', 'city', 'description', 'title',
                  'company', 'level', 'institution', 'course_level']
     df_all[text_cols] = df_all[text_cols].fillna('')
@@ -235,10 +253,12 @@ async def predict(request: Request):
     text_combined = df_all[text_cols].agg(' '.join, axis=1).iloc[0]
     X_text = tfidf.transform([text_combined])
 
+    # Numerical features
     num_cols = ['duration', 'nombre_experiences', 'nb_cours', 'moyenne_notes', 'score_reputation']
     df_all[num_cols] = df_all[num_cols].fillna(0)
     X_num = sparse.csr_matrix(df_all[num_cols].iloc[0].values.reshape(1, -1))
     X_final = hstack([X_text, X_num])
 
+    # Make prediction
     prediction = model.predict(X_final)[0]
     return {"predicted_numberOfStars": round(float(prediction), 2)}
