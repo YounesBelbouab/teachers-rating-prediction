@@ -13,8 +13,8 @@ from scipy.sparse import hstack
 
 app = FastAPI()
 
-model = joblib.load("modele_stars(1).pkl")
-tfidf = joblib.load("tfidf_vectorizer(1).pkl")
+model = joblib.load("modele_stars.pkl")
+tfidf = joblib.load("tfidf_vectorizer.pkl")
 
 
 def nettoyer_texte(texte):
