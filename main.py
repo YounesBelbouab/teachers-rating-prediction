@@ -247,11 +247,18 @@ async def predict(request: Request):
     X_text = tfidf.transform([text_input])
 
     features_row = df_all[df_all["id"] == user_id].iloc[0]
-    X_num_array = np.array([[float(features_row['duration']),
-                             float(features_row['nombre_experiences']),
-                             float(features_row['nb_cours']),
-                             float(features_row['moyenne_notes']),
-                             float(features_row['score_reputation'])]])
+
+    def safe_float(value):
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            return 0.0
+
+    X_num_array = np.array([[safe_float(features_row['duration']),
+                             safe_float(features_row['nombre_experiences']),
+                             safe_float(features_row['nb_cours']),
+                             safe_float(features_row['moyenne_notes']),
+                             safe_float(features_row['score_reputation'])]])
 
     X_num = csr_matrix(X_num_array)
 
@@ -259,4 +266,4 @@ async def predict(request: Request):
 
     # Make prediction
     prediction = model.predict(X_final)[0]
-    return {"predicted_numberOfStars": round(float(prediction), 2)}
+    return {"gradeAverage": round(float(prediction), 2)}
