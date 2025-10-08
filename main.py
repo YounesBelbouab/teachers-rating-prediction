@@ -2,66 +2,196 @@ from fastapi import FastAPI, Request
 import joblib
 import pandas as pd
 import numpy as np
+import json
+import re
+import unicodedata
+from datetime import datetime
+from dateutil import parser
+from dateutil.relativedelta import relativedelta
 from scipy import sparse
 from scipy.sparse import hstack
 
 app = FastAPI()
 
-# Charger le modèle et le vectorizer
 model = joblib.load("modele_stars(1).pkl")
 tfidf = joblib.load("tfidf_vectorizer(1).pkl")
+
+def nettoyer_texte(texte):
+    if not isinstance(texte, str):
+        return "Inconnu"
+    texte = texte.strip().lower()
+    texte = ''.join(c for c in unicodedata.normalize('NFD', texte) if unicodedata.category(c) != 'Mn')
+    texte = re.sub(r'[^a-z0-9\s]', ' ', texte)
+    texte = re.sub(r'\s+', ' ', texte).strip()
+    return texte if texte else "inconnu"
+
+def convert_duration_to_months(text):
+    if pd.isna(text) or str(text).strip() == "" or text == "Inconnu":
+        return np.nan
+    text = str(text).lower().strip()
+    years = re.search(r"(\d+)\s*an", text)
+    months = re.search(r"(\d+)\s*mois", text)
+    total = 0
+    if years:
+        total += int(years.group(1)) * 12
+    if "demi" in text and not months:
+        total += 6
+    if months:
+        total += int(months.group(1))
+    if total > 0:
+        return int(total)
+    match = re.findall(r"\d{4}", text)
+    if match:
+        start_year = int(match[0])
+        end_year = None
+        if len(match) > 1:
+            end_year = int(match[1])
+        elif "présent" in text or "present" in text:
+            end_year = datetime.now().year
+        if end_year:
+            return int((end_year - start_year) * 12)
+    date_pattern = re.findall(r"(\d{2}/\d{4})", text)
+    if date_pattern:
+        try:
+            start_date = datetime.strptime(date_pattern[0], "%m/%Y")
+            if len(date_pattern) > 1:
+                end_date = datetime.strptime(date_pattern[1], "%m/%Y")
+            elif "présent" in text or "present" in text:
+                end_date = datetime.now()
+            else:
+                return np.nan
+            diff = (end_date.year - start_date.year) * 12 + (end_date.month - start_date.month)
+            return max(diff, 1)
+        except:
+            pass
+    if re.fullmatch(r"\d{4}", text):
+        return 12
+    return np.nan
+
+def rename_year_columns(df):
+    new_columns = {}
+    for col in df.columns:
+        if 'year' in col.lower():
+            new_columns[col] = col.lower().replace('year', 'years')
+    return df.rename(columns=new_columns)
+
+def calculate_duration_in_months(df):
+    def safe_parse_date(date_str):
+        if pd.isna(date_str) or str(date_str).strip() == "":
+            return None
+        text = str(date_str).lower().strip()
+        if "present" in text or "présent" in text:
+            return datetime.now()
+        try:
+            return parser.parse(text, fuzzy=True, dayfirst=True)
+        except Exception:
+            return None
+    df["start_date_parsed"] = df["start_date"].apply(safe_parse_date)
+    df["end_date_parsed"] = df["end_date"].apply(safe_parse_date)
+    def compute_months(row):
+        if pd.isna(row["start_date_parsed"]) or pd.isna(row["end_date_parsed"]):
+            return np.nan
+        diff = relativedelta(row["end_date_parsed"], row["start_date_parsed"])
+        total_months = diff.years * 12 + diff.months
+        return max(total_months, 0)
+    df["duration"] = df.apply(compute_months, axis=1)
+    df = df.drop(columns=["start_date", "end_date", "start_date_parsed", "end_date_parsed"])
+    df["duration"] = df["duration"].fillna(0).astype(int)
+    return df
+
+def remplacer_nan_par_inconnu(df, colonne=None):
+    if colonne is None or colonne not in df.columns:
+        return df
+    if pd.api.types.is_numeric_dtype(df[colonne]):
+        df[colonne] = df[colonne].fillna(0)
+    else:
+        df[colonne] = df[colonne].fillna("Inconnu")
+        df[colonne] = df[colonne].replace("", "Inconnu")
+    return df
 
 @app.post("/api/predict")
 async def predict(request: Request):
     data = await request.json()
     user_id = data.get("id", "temp")
 
-    # === 🔹 Construction du mini DataFrame simulé ===
-    rows = []
+    # === Nettoyage de base des valeurs ===
+    clean_data = {k: (v if v is not None else "Inconnu") for k, v in data.items()}
+    firstname = clean_data.get("firstname", "Inconnu").strip()
+    lastname = clean_data.get("lastname", "Inconnu").strip()
+    city = clean_data.get("city", "Inconnu").strip()
+    description = clean_data.get("description", "Inconnu").strip()
 
-    # Description principale
-    rows.append({
+    # === Construction du DataFrame global ===
+    base_rows, exp_rows, dip_rows, course_rows = [], [], [], []
+
+    base_rows.append({
         "id": user_id,
-        "source": "base",
-        "description": data.get("description", ""),
-        "numberOfStars": np.nan
+        "firstname": firstname,
+        "lastname": lastname,
+        "city": city,
+        "description": description,
+        "source": "base"
     })
 
-    # Diplômes
-    for d in data.get("diplomas", []):
-        rows.append({
+    for d in clean_data.get("diplomas", []):
+        dip_rows.append({
             "id": user_id,
-            "source": "diploma",
-            "title": d.get("title", ""),
-            "level": d.get("level", ""),
-            "institution": d.get("institution", ""),
-            "numberOfStars": np.nan
+            "firstname": firstname,
+            "lastname": lastname,
+            "title": d.get("title", "Inconnu"),
+            "level": d.get("level", "Inconnu"),
+            "institution": d.get("institution", "Inconnu"),
+            "source": "diploma"
         })
 
-    # Expériences
-    for e in data.get("experiences", []):
-        rows.append({
+    for e in clean_data.get("experiences", []):
+        exp_rows.append({
             "id": user_id,
-            "source": "experience",
-            "company": e.get("company", ""),
-            "city": e.get("city", ""),
-            "duration": e.get("duration", ""),
-            "numberOfStars": np.nan
+            "firstname": firstname,
+            "lastname": lastname,
+            "title": e.get("title", "Inconnu"),
+            "company": e.get("company", "Inconnu"),
+            "city": e.get("city", e.get("location", e.get("country", "Inconnu"))),
+            "duration": e.get("duration", e.get("dates", "Inconnu")),
+            "description": e.get("description", "Inconnu"),
+            "source": "experience"
         })
 
-    # Cours passés
-    for c in data.get("pastCourses", []):
-        rows.append({
+    for c in clean_data.get("pastCourses", []):
+        course_rows.append({
             "id": user_id,
-            "source": "pastcourse",
-            "course_code": c.get("course_code", ""),
-            "course_level": c.get("course_level", ""),
-            "numberOfStars": c.get("numberOfStars", np.nan)
+            "firstname": firstname,
+            "lastname": lastname,
+            "title": c.get("title", "Inconnu"),
+            "numberOfStars": c.get("numberOfStars", np.nan),
+            "course_code": c.get("course_code", "Inconnu"),
+            "course_level": c.get("course_level", "Inconnu"),
+            "description": c.get("description", c.get("course_description", "Inconnu")),
+            "start_date": c.get("start_date", "Inconnu"),
+            "end_date": c.get("end_date", "Inconnu"),
+            "source": "pastcourse"
         })
 
-    df_all = pd.DataFrame(rows)
+    df_base = pd.DataFrame(base_rows)
+    df_exp = pd.DataFrame(exp_rows)
+    df_dip = pd.DataFrame(dip_rows)
+    df_course = pd.DataFrame(course_rows)
 
-    # === 🔹 Calcul des colonnes d’agrégation ===
+    # === Nettoyage détaillé ===
+    df_exp["duration"] = df_exp["duration"].apply(convert_duration_to_months)
+    df_exp = df_exp.dropna(subset=["duration"])
+    df_exp["duration"] = df_exp["duration"].fillna(0).astype(int)
+    df_exp["description"] = df_exp["description"].fillna("Inconnu")
+    df_exp["city"] = df_exp["city"].fillna("Inconnu")
+    df_exp["company"] = df_exp["company"].fillna("Inconnu")
+
+    df_dip = remplacer_nan_par_inconnu(df_dip, "institution")
+    df_course = rename_year_columns(df_course)
+    df_course = calculate_duration_in_months(df_course)
+    df_course = remplacer_nan_par_inconnu(df_course, "duration")
+
+    df_all = pd.concat([df_base, df_exp, df_dip, df_course], ignore_index=True, sort=False).fillna("Inconnu")
+
     df_all["numberOfStars"] = pd.to_numeric(df_all.get("numberOfStars", np.nan), errors="coerce")
 
     nombre_exp = df_all[df_all["source"] == "experience"].groupby("id").size().rename("nombre_experiences")
@@ -79,27 +209,23 @@ async def predict(request: Request):
         (coef_cours * (df_features["nb_cours"] / max_cours)) +
         (coef_stars * (df_features["moyenne_notes"] / 5))
     ) * 100
-
     df_features["score_reputation"] = df_features["score_reputation"].round(2)
-
-    # === 🔹 Fusion avec les données principales ===
     df_all = df_all.merge(df_features, on="id", how="left")
 
-    # === 🔹 Préparation du texte combiné ===
     text_cols = ['firstname', 'lastname', 'city', 'description', 'title',
                  'company', 'level', 'institution', 'course_level']
     df_all[text_cols] = df_all[text_cols].fillna('')
+
+    for col in text_cols:
+        df_all[col] = df_all[col].apply(nettoyer_texte)
+
     text_combined = df_all[text_cols].agg(' '.join, axis=1).iloc[0]
     X_text = tfidf.transform([text_combined])
 
-    # === 🔹 Variables numériques ===
     num_cols = ['duration', 'nombre_experiences', 'nb_cours', 'moyenne_notes', 'score_reputation']
     df_all[num_cols] = df_all[num_cols].fillna(0)
     X_num = sparse.csr_matrix(df_all[num_cols].iloc[0].values.reshape(1, -1))
-
-    # === 🔹 Combinaison finale ===
     X_final = hstack([X_text, X_num])
 
-    # === 🔹 Prédiction ===
     prediction = model.predict(X_final)[0]
     return {"predicted_numberOfStars": round(float(prediction), 2)}
