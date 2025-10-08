@@ -251,7 +251,7 @@ async def predict(request: Request):
 
     df_filtered['duration'] = pd.to_numeric(df_filtered['duration'], errors='coerce').fillna(0)
 
-    X_text_raw = df_filtered[text_cols].fillna('').agg(' '.join, axis=1)
+    X_text_raw = df_filtered[text_cols].fillna('').astype(str).agg(' '.join, axis=1)
 
     tfidf = TfidfVectorizer()
     X_text = tfidf.fit_transform(X_text_raw)
