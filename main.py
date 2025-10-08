@@ -195,6 +195,11 @@ async def predict(request: Request):
 
     df_dip = remplacer_nan_par_inconnu(df_dip, "institution")
     df_course = rename_year_columns(df_course)
+    for col in ["start_date", "end_date"]:
+        if col not in df_course.columns:
+            df_course[col] = "Inconnu"
+
+    df_course = calculate_duration_in_months(df_course)
     df_course = calculate_duration_in_months(df_course)
     df_course = remplacer_nan_par_inconnu(df_course, "duration")
 
