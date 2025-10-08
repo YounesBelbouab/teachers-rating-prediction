@@ -8,26 +8,8 @@ import unicodedata
 from datetime import datetime
 from dateutil import parser
 from dateutil.relativedelta import relativedelta
-from scipy import sparse
-from scipy.sparse import hstack
-import matplotlib.pyplot as plt
-import seaborn as sns
-import sklearn
-import warnings
-
-from sklearn.preprocessing import LabelEncoder
-from sklearn.impute import KNNImputer
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import f1_score
-from sklearn.model_selection import cross_val_score
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import GridSearchCV
-from sklearn.metrics import mean_squared_error
 from scipy.sparse import hstack
-from xgboost import XGBRegressor
 
 app = FastAPI()
 
