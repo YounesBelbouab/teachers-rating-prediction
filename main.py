@@ -177,8 +177,16 @@ async def predict(request: Request):
     df_dip = pd.DataFrame(dip_rows)
     df_course = pd.DataFrame(course_rows)
 
-    # === Nettoyage détaillé ===
+    if "duration" not in df_exp.columns:
+        df_exp["duration"] = "Inconnu"
+
     df_exp["duration"] = df_exp["duration"].apply(convert_duration_to_months)
+    df_exp["duration"] = df_exp["duration"].fillna(0).astype(int)
+
+    for col in ["description", "city", "company"]:
+        if col not in df_exp.columns:
+            df_exp[col] = "Inconnu"
+        df_exp[col] = df_exp[col].fillna("Inconnu")
     df_exp = df_exp.dropna(subset=["duration"])
     df_exp["duration"] = df_exp["duration"].fillna(0).astype(int)
     df_exp["description"] = df_exp["description"].fillna("Inconnu")
