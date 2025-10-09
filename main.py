@@ -10,6 +10,8 @@ from dateutil import parser
 from dateutil.relativedelta import relativedelta
 from sklearn.feature_extraction.text import TfidfVectorizer
 from scipy.sparse import hstack, csr_matrix
+from catboost import CatBoostRegressor
+import catboost
 
 app = FastAPI()
 
