@@ -245,7 +245,6 @@ async def predict(request: Request):
         safe_float(features_row['nb_cours']),
         safe_float(features_row['moyenne_notes']),
         safe_float(features_row['score_reputation']),
-        safe_float(features_row['max_diplome_coef'])
     ]])
 
     X_num = csr_matrix(X_num_array)
