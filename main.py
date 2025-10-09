@@ -126,7 +126,6 @@ def remplacer_nan_par_inconnu(df, colonne=None):
     return df
 
 
-# === NEW: Function to assign coefficient based on diploma 'level' ===
 def get_diplome_coef(level):
     if pd.isna(level) or str(level).strip().lower() == "inconnu" or str(level).strip() == "":
         return np.nan
@@ -154,10 +153,8 @@ async def predict(request: Request):
     data = await request.json()
     user_id = data.get("id", "temp")
 
-    # === 1. Basic value cleaning ===
     clean_data = {k: (v if v is not None else "Inconnu") for k, v in data.items()}
 
-    # === 2. Building DataFrames from JSON sections ===
     base_rows, exp_rows, dip_rows, course_rows = [], [], [], []
 
     base_rows.append({
@@ -186,7 +183,6 @@ async def predict(request: Request):
             "source": "pastcourse"
         })
 
-    # === 3. Preprocessing and Combining DataFrames ===
     df_exp = pd.DataFrame(exp_rows)
     if not df_exp.empty:
         df_exp["duration"] = df_exp["duration"].apply(convert_duration_to_months).fillna(0).astype(int)
@@ -199,18 +195,19 @@ async def predict(request: Request):
         pd.DataFrame(base_rows), df_exp, pd.DataFrame(dip_rows), df_course
     ], ignore_index=True).fillna("Inconnu")
 
+    # === FIX: Vérifier si la colonne existe avant de l'utiliser ===
+    if "numberOfStars" not in df_all.columns:
+        df_all["numberOfStars"] = np.nan
+
     df_all["numberOfStars"] = pd.to_numeric(df_all["numberOfStars"], errors='coerce')
 
-    # === 4. Feature Engineering ===
-
-    # NEW: Calculate diploma coefficient from 'level' text
+    # === Feature Engineering ===
     mask_dip = df_all["source"] == "diploma"
     df_all["diplome_coef"] = np.nan
     if mask_dip.any():
         df_all.loc[mask_dip, "diplome_coef"] = df_all.loc[mask_dip, "level"].apply(get_diplome_coef)
     df_all['diplome_coef'] = pd.to_numeric(df_all['diplome_coef'], errors='coerce').fillna(0)
 
-    # Aggregate features for the user
     nombre_exp = (df_all["source"] == "experience").sum()
     nb_cours = (df_all["source"] == "pastcourse").sum()
     moyenne_notes = df_all["numberOfStars"].mean()
@@ -225,7 +222,6 @@ async def predict(request: Request):
         "max_diplome_coef": max_diplome_coef
     }]).fillna(0)
 
-    # Calculate reputation score
     coef_exp, coef_cours, coef_stars = 0.3, 0.3, 0.4
     df_features["score_reputation"] = (
                                               (coef_exp * (df_features["nombre_experiences"] / max(nombre_exp, 1))) +
@@ -234,14 +230,11 @@ async def predict(request: Request):
                                       ) * 100
     df_features = df_features.fillna(0)
 
-    # === 5. Preparing Data for the Model ===
-
-    # MODIFIED: Combine all specified text columns
+    # === Preparing Data for the Model ===
     text_cols = ['description', 'company', 'title', 'level', 'institution', 'course_level']
-    text_input = ' '.join(str(df_all[col].fillna('').agg(' '.join)) for col in text_cols)
+    text_input = ' '.join(str(df_all[col].fillna('').agg(' '.join)) for col in text_cols if col in df_all.columns)
     X_text = tfidf.transform([nettoyer_texte(text_input)])
 
-    # Get the single row of aggregated features
     features_row = df_features.iloc[0]
 
     def safe_float(value):
@@ -250,7 +243,6 @@ async def predict(request: Request):
         except (ValueError, TypeError):
             return 0.0
 
-    # MODIFIED: Use aggregated features including the new diploma coefficient
     X_num_array = np.array([[
         safe_float(features_row['total_duration']),
         safe_float(features_row['nombre_experiences']),
@@ -263,6 +255,6 @@ async def predict(request: Request):
     X_num = csr_matrix(X_num_array)
     X_final = hstack([X_text, X_num])
 
-    # === 6. Make Prediction ===
+    # === Make Prediction ===
     prediction = model.predict(X_final)[0]
     return {"gradeAverage": round(float(prediction), 2)}
