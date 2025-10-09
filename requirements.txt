@@ -3,5 +3,7 @@ uvicorn
 joblib
 scikit-learn
 pandas
-xgboost
+numpy
+python-dateutil
 catboost
+xgboost
