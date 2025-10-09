@@ -13,8 +13,8 @@ from scipy.sparse import hstack, csr_matrix
 
 app = FastAPI()
 
-model = joblib.load("xgb_model_1.pkl")
-tfidf = joblib.load("tfidf_vectorizer_xgb_1.pkl")
+model = joblib.load("xgb_model.pkl")
+tfidf = joblib.load("tfidf_vectorizer_xgb.pkl")
 
 
 def nettoyer_texte(texte):
