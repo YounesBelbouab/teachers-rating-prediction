@@ -11,4 +11,4 @@ scikit-learn==1.6.1
 sklearn-pandas==2.2.0
 types-python-dateutil==2.9.0.20250822
 uvicorn
-gunicorn
+fastapi
