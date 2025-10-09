@@ -216,7 +216,16 @@ async def predict(request: Request):
     df_features = df_features.fillna(0)
 
     # === Preparing Data for the Model ===
-    text_cols = ['level', 'source']
+    text_cols = [
+        'description',
+        'city',
+        'title',
+        'level',
+        'company',
+        'institution',
+        'course_code',
+        'course_level'
+    ]
     text_input = ' '.join(
         ' '.join(df_all[col].astype(str).fillna('')) for col in text_cols if col in df_all.columns
     )
