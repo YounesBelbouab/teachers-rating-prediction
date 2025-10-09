@@ -17,7 +17,7 @@ app = FastAPI()
 
 # Load pre-trained model and vectorizer
 model = joblib.load("best_cat.pkl")
-tfidf = joblib.load("tfidf_vectorizer_xgb.pkl")
+tfidf = joblib.load("tfidf_vectorizer_cat.pkl")
 
 
 # === Helper Functions ===
