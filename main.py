@@ -16,8 +16,8 @@ import catboost
 app = FastAPI()
 
 # Load pre-trained model and vectorizer
-model = joblib.load("best_cat_v1.pkl")
-tfidf = joblib.load("tfidf_vectorizer_cat.pkl")
+model = joblib.load("best_cat_v2.pkl")
+tfidf = joblib.load("tfidf_vectorizer_cat_v2.pkl")
 
 
 # === Helper Functions ===
