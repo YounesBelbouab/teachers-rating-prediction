@@ -13,7 +13,7 @@ from scipy.sparse import hstack, csr_matrix
 
 app = FastAPI()
 
-model = joblib.load("xgb_model.pkl")
+model = joblib.load("best_cat.pkl")
 tfidf = joblib.load("tfidf_vectorizer_xgb.pkl")
 
 
