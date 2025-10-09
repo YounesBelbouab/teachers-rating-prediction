@@ -76,14 +76,6 @@ def convert_duration_to_months(text):
     return np.nan
 
 
-def rename_year_columns(df):
-    new_columns = {}
-    for col in df.columns:
-        if 'year' in col.lower():
-            new_columns[col] = col.lower().replace('year', 'years')
-    return df.rename(columns=new_columns)
-
-
 def calculate_duration_in_months(df):
     if "start_date" not in df.columns:
         df["start_date"] = "Inconnu"
@@ -113,16 +105,6 @@ def calculate_duration_in_months(df):
     df["duration"] = df.apply(compute_months, axis=1)
     df = df.drop(columns=["start_date", "end_date", "start_date_parsed", "end_date_parsed"])
     df["duration"] = df["duration"].fillna(0).astype(int)
-    return df
-
-
-def remplacer_nan_par_inconnu(df, colonne=None):
-    if colonne is None or colonne not in df.columns:
-        return df
-    if pd.api.types.is_numeric_dtype(df[colonne]):
-        df[colonne] = df[colonne].fillna(0)
-    else:
-        df[colonne] = df[colonne].fillna("Inconnu").replace("", "Inconnu")
     return df
 
 
@@ -195,10 +177,8 @@ async def predict(request: Request):
         pd.DataFrame(base_rows), df_exp, pd.DataFrame(dip_rows), df_course
     ], ignore_index=True).fillna("Inconnu")
 
-    # === FIX: Vérifier si la colonne existe avant de l'utiliser ===
     if "numberOfStars" not in df_all.columns:
         df_all["numberOfStars"] = np.nan
-
     df_all["numberOfStars"] = pd.to_numeric(df_all["numberOfStars"], errors='coerce')
 
     # === Feature Engineering ===
@@ -211,6 +191,11 @@ async def predict(request: Request):
     nombre_exp = (df_all["source"] == "experience").sum()
     nb_cours = (df_all["source"] == "pastcourse").sum()
     moyenne_notes = df_all["numberOfStars"].mean()
+
+    # FIX: Ensure 'duration' column exists before trying to access it
+    if 'duration' not in df_all.columns:
+        df_all['duration'] = 0
+
     total_duration = df_all[df_all["source"] == 'experience']['duration'].sum()
     max_diplome_coef = df_all["diplome_coef"].max()
 
@@ -232,7 +217,9 @@ async def predict(request: Request):
 
     # === Preparing Data for the Model ===
     text_cols = ['description', 'company', 'title', 'level', 'institution', 'course_level']
-    text_input = ' '.join(str(df_all[col].fillna('').agg(' '.join)) for col in text_cols if col in df_all.columns)
+    text_input = ' '.join(
+        ' '.join(df_all[col].astype(str).fillna('')) for col in text_cols if col in df_all.columns
+    )
     X_text = tfidf.transform([nettoyer_texte(text_input)])
 
     features_row = df_features.iloc[0]
