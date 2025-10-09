@@ -13,7 +13,7 @@ app = FastAPI()
 #tfidf = joblib.load("tfidf_vectorizer_cat.pkl")
 
 try:
-    pipeline = joblib.load('pipeline_complet.joblib')
+    pipeline = joblib.load('model_pipeline.joblib')
 except FileNotFoundError:
     pipeline = None
 
