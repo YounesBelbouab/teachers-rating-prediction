@@ -15,9 +15,12 @@ import catboost
 
 app = FastAPI()
 
+# Load pre-trained model and vectorizer
 model = joblib.load("best_cat.pkl")
 tfidf = joblib.load("tfidf_vectorizer_xgb.pkl")
 
+
+# === Helper Functions ===
 
 def nettoyer_texte(texte):
     if not isinstance(texte, str):
@@ -82,7 +85,6 @@ def rename_year_columns(df):
 
 
 def calculate_duration_in_months(df):
-    # Ensure columns exist before processing
     if "start_date" not in df.columns:
         df["start_date"] = "Inconnu"
     if "end_date" not in df.columns:
@@ -106,8 +108,7 @@ def calculate_duration_in_months(df):
         if pd.isna(row["start_date_parsed"]) or pd.isna(row["end_date_parsed"]):
             return np.nan
         diff = relativedelta(row["end_date_parsed"], row["start_date_parsed"])
-        total_months = diff.years * 12 + diff.months
-        return max(total_months, 0)
+        return max(diff.years * 12 + diff.months, 0)
 
     df["duration"] = df.apply(compute_months, axis=1)
     df = df.drop(columns=["start_date", "end_date", "start_date_parsed", "end_date_parsed"])
@@ -121,134 +122,127 @@ def remplacer_nan_par_inconnu(df, colonne=None):
     if pd.api.types.is_numeric_dtype(df[colonne]):
         df[colonne] = df[colonne].fillna(0)
     else:
-        df[colonne] = df[colonne].fillna("Inconnu")
-        df[colonne] = df[colonne].replace("", "Inconnu")
+        df[colonne] = df[colonne].fillna("Inconnu").replace("", "Inconnu")
     return df
 
+
+# === NEW: Function to assign coefficient based on diploma 'level' ===
+def get_diplome_coef(level):
+    if pd.isna(level) or str(level).strip().lower() == "inconnu" or str(level).strip() == "":
+        return np.nan
+    text = str(level).lower()
+    if any(word in text for word in ["doctorat", "phd", "doctor", "dr ", "dr.", "dr ing", "professeur", "professor"]):
+        return 5
+    if any(word in text for word in
+           ["master", "maîtrise", "maitrise", "maître", "maitre", "post-graduation", "post diplome", "post-diplome"]):
+        return 4
+    if any(word in text for word in ["licence", "diplôme professionnel", "diplome professionnel", "professionnel"]):
+        return 3
+    if any(word in text for word in
+           ["diplôme", "diplome", "état", "formation", "certificat", "certificate", "certifié", "certifie",
+            "aptitude"]):
+        return 2
+    if any(word in text for word in ["secondaire", "senior"]):
+        return 1
+    return np.nan
+
+
+# === API Endpoint ===
 
 @app.post("/api/predict")
 async def predict(request: Request):
     data = await request.json()
     user_id = data.get("id", "temp")
 
-    # === Nettoyage de base des valeurs ===
+    # === 1. Basic value cleaning ===
     clean_data = {k: (v if v is not None else "Inconnu") for k, v in data.items()}
-    firstname = clean_data.get("firstname", "Inconnu").strip()
-    lastname = clean_data.get("lastname", "Inconnu").strip()
-    city = clean_data.get("city", "Inconnu").strip()
-    description = clean_data.get("description", "Inconnu").strip()
 
-    # === Construction du DataFrame global ===
+    # === 2. Building DataFrames from JSON sections ===
     base_rows, exp_rows, dip_rows, course_rows = [], [], [], []
 
     base_rows.append({
-        "id": user_id,
-        "firstname": firstname,
-        "lastname": lastname,
-        "city": city,
-        "description": description,
-        "source": "base"
+        "id": user_id, "description": clean_data.get("description", "Inconnu"), "source": "base"
     })
 
     for d in clean_data.get("diplomas", []):
         dip_rows.append({
-            "id": user_id,
-            "firstname": firstname,
-            "lastname": lastname,
-            "title": d.get("title", "Inconnu"),
-            "level": d.get("level", "Inconnu"),
-            "institution": d.get("institution", "Inconnu"),
-            "source": "diploma"
+            "id": user_id, "title": d.get("title", "Inconnu"), "level": d.get("level", "Inconnu"),
+            "institution": d.get("institution", "Inconnu"), "source": "diploma"
         })
 
     for e in clean_data.get("experiences", []):
         exp_rows.append({
-            "id": user_id,
-            "firstname": firstname,
-            "lastname": lastname,
-            "title": e.get("title", "Inconnu"),
-            "company": e.get("company", "Inconnu"),
-            "city": e.get("city", e.get("location", e.get("country", "Inconnu"))),
+            "id": user_id, "title": e.get("title", "Inconnu"), "company": e.get("company", "Inconnu"),
             "duration": e.get("duration", e.get("dates", "Inconnu")),
-            "description": e.get("description", "Inconnu"),
-            "source": "experience"
+            "description": e.get("description", "Inconnu"), "source": "experience"
         })
 
     for c in clean_data.get("pastCourses", []):
         course_rows.append({
-            "id": user_id,
-            "firstname": firstname,
-            "lastname": lastname,
-            "title": c.get("title", "Inconnu"),
-            "numberOfStars": c.get("numberOfStars", np.nan),
-            "course_code": c.get("course_code", "Inconnu"),
+            "id": user_id, "title": c.get("title", "Inconnu"), "numberOfStars": c.get("numberOfStars", np.nan),
             "course_level": c.get("course_level", "Inconnu"),
             "description": c.get("description", c.get("course_description", "Inconnu")),
-            "start_date": c.get("start_date", "Inconnu"),
-            "end_date": c.get("end_date", "Inconnu"),
+            "start_date": c.get("start_date", "Inconnu"), "end_date": c.get("end_date", "Inconnu"),
             "source": "pastcourse"
         })
 
-    df_base = pd.DataFrame(base_rows)
+    # === 3. Preprocessing and Combining DataFrames ===
     df_exp = pd.DataFrame(exp_rows)
-    df_dip = pd.DataFrame(dip_rows)
+    if not df_exp.empty:
+        df_exp["duration"] = df_exp["duration"].apply(convert_duration_to_months).fillna(0).astype(int)
+
     df_course = pd.DataFrame(course_rows)
+    if not df_course.empty:
+        df_course = calculate_duration_in_months(df_course)
 
-    # Process experiences
-    if "duration" not in df_exp.columns:
-        df_exp["duration"] = "Inconnu"
+    df_all = pd.concat([
+        pd.DataFrame(base_rows), df_exp, pd.DataFrame(dip_rows), df_course
+    ], ignore_index=True).fillna("Inconnu")
 
-    df_exp["duration"] = df_exp["duration"].apply(convert_duration_to_months)
-    df_exp["duration"] = df_exp["duration"].fillna(0).astype(int)
+    df_all["numberOfStars"] = pd.to_numeric(df_all["numberOfStars"], errors='coerce')
 
-    for col in ["description", "city", "company"]:
-        if col not in df_exp.columns:
-            df_exp[col] = "Inconnu"
-        df_exp[col] = df_exp[col].fillna("Inconnu")
+    # === 4. Feature Engineering ===
 
-    df_exp = df_exp.dropna(subset=["duration"])
-    df_exp["duration"] = df_exp["duration"].fillna(0).astype(int)
+    # NEW: Calculate diploma coefficient from 'level' text
+    mask_dip = df_all["source"] == "diploma"
+    df_all["diplome_coef"] = np.nan
+    if mask_dip.any():
+        df_all.loc[mask_dip, "diplome_coef"] = df_all.loc[mask_dip, "level"].apply(get_diplome_coef)
+    df_all['diplome_coef'] = pd.to_numeric(df_all['diplome_coef'], errors='coerce').fillna(0)
 
-    # Process diplomas
-    df_dip = remplacer_nan_par_inconnu(df_dip, "institution")
+    # Aggregate features for the user
+    nombre_exp = (df_all["source"] == "experience").sum()
+    nb_cours = (df_all["source"] == "pastcourse").sum()
+    moyenne_notes = df_all["numberOfStars"].mean()
+    total_duration = df_all[df_all["source"] == 'experience']['duration'].sum()
+    max_diplome_coef = df_all["diplome_coef"].max()
 
-    # Process courses
-    df_course = rename_year_columns(df_course)
+    df_features = pd.DataFrame([{
+        "nombre_experiences": nombre_exp,
+        "nb_cours": nb_cours,
+        "moyenne_notes": moyenne_notes,
+        "total_duration": total_duration,
+        "max_diplome_coef": max_diplome_coef
+    }]).fillna(0)
 
-    # Calculate duration only once
-    df_course = calculate_duration_in_months(df_course)
-    df_course = remplacer_nan_par_inconnu(df_course, "duration")
-
-    # Combine all dataframes
-    df_all = pd.concat([df_base, df_exp, df_dip, df_course], ignore_index=True, sort=False).fillna("Inconnu")
-
-    df_all["numberOfStars"] = pd.to_numeric(df_all.get("numberOfStars", np.nan), errors="coerce")
-
-    # Calculate features
-    nombre_exp = df_all[df_all["source"] == "experience"].groupby("id").size().rename("nombre_experiences")
-    nb_cours = df_all[df_all["source"] == "pastcourse"].groupby("id").size().rename("nb_cours")
-    moyenne_notes = df_all[df_all["source"] == "pastcourse"].groupby("id")["numberOfStars"].mean().rename(
-        "moyenne_notes")
-
-    df_features = pd.concat([nombre_exp, nb_cours, moyenne_notes], axis=1).fillna(0)
-
+    # Calculate reputation score
     coef_exp, coef_cours, coef_stars = 0.3, 0.3, 0.4
-    max_exp = max(df_features["nombre_experiences"].max(), 1)
-    max_cours = max(df_features["nb_cours"].max(), 1)
-
     df_features["score_reputation"] = (
-                                              (coef_exp * (df_features["nombre_experiences"] / max_exp)) +
-                                              (coef_cours * (df_features["nb_cours"] / max_cours)) +
+                                              (coef_exp * (df_features["nombre_experiences"] / max(nombre_exp, 1))) +
+                                              (coef_cours * (df_features["nb_cours"] / max(nb_cours, 1))) +
                                               (coef_stars * (df_features["moyenne_notes"] / 5))
                                       ) * 100
-    df_features["score_reputation"] = df_features["score_reputation"].round(2)
-    df_all = df_all.merge(df_features, on="id", how="left")
+    df_features = df_features.fillna(0)
 
-    text_input = \
-    df_all[df_all["id"] == user_id][['description', 'company']].fillna('').astype(str).agg(' '.join, axis=1).iloc[0]
-    X_text = tfidf.transform([text_input])
+    # === 5. Preparing Data for the Model ===
 
-    features_row = df_all[df_all["id"] == user_id].iloc[0]
+    # MODIFIED: Combine all specified text columns
+    text_cols = ['description', 'company', 'title', 'level', 'institution', 'course_level']
+    text_input = ' '.join(str(df_all[col].fillna('').agg(' '.join)) for col in text_cols)
+    X_text = tfidf.transform([nettoyer_texte(text_input)])
+
+    # Get the single row of aggregated features
+    features_row = df_features.iloc[0]
 
     def safe_float(value):
         try:
@@ -256,16 +250,19 @@ async def predict(request: Request):
         except (ValueError, TypeError):
             return 0.0
 
-    X_num_array = np.array([[safe_float(features_row['duration']),
-                             safe_float(features_row['nombre_experiences']),
-                             safe_float(features_row['nb_cours']),
-                             safe_float(features_row['moyenne_notes']),
-                             safe_float(features_row['score_reputation'])]])
+    # MODIFIED: Use aggregated features including the new diploma coefficient
+    X_num_array = np.array([[
+        safe_float(features_row['total_duration']),
+        safe_float(features_row['nombre_experiences']),
+        safe_float(features_row['nb_cours']),
+        safe_float(features_row['moyenne_notes']),
+        safe_float(features_row['score_reputation']),
+        safe_float(features_row['max_diplome_coef'])
+    ]])
 
     X_num = csr_matrix(X_num_array)
-
     X_final = hstack([X_text, X_num])
 
-    # Make prediction
+    # === 6. Make Prediction ===
     prediction = model.predict(X_final)[0]
     return {"gradeAverage": round(float(prediction), 2)}
