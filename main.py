@@ -217,7 +217,6 @@ async def predict(request: Request):
 
     # === Preparing Data for the Model ===
     text_cols = [
-        'description',
         'city',
         'title',
         'level',
