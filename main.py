@@ -2,21 +2,25 @@ from fastapi import FastAPI, Request
 import joblib
 import pandas as pd
 import numpy as np
+import json
+import re
+import unicodedata
 from datetime import datetime
 from dateutil import parser
 from dateutil.relativedelta import relativedelta
+from sklearn.feature_extraction.text import TfidfVectorizer
+from scipy.sparse import hstack, csr_matrix
+from catboost import CatBoostRegressor
+import catboost
 
 app = FastAPI()
 
 # Load pre-trained model and vectorizer
-#model = joblib.load("best_cat.pkl")
-#tfidf = joblib.load("tfidf_vectorizer_cat.pkl")
+model = joblib.load("best_cat_v1.pkl")
+tfidf = joblib.load("tfidf_vectorizer_cat.pkl")
 
-try:
-    pipeline = joblib.load('model_pipeline.joblib')
-except FileNotFoundError:
-    pipeline = None
 
+# === Helper Functions ===
 
 def nettoyer_texte(texte):
     if not isinstance(texte, str):
@@ -212,72 +216,39 @@ async def predict(request: Request):
     df_features = df_features.fillna(0)
 
     # === Preparing Data for the Model ===
-    user_id = data.get("id", "temp")
-    clean_data = {k: (v if v is not None else "Inconnu") for k, v in data.items()}
-    base_rows, exp_rows, dip_rows, course_rows = [], [], [], []
-    base_rows.append({"id": user_id, "description": clean_data.get("description", "Inconnu"), "source": "base"})
-    for d in clean_data.get("diplomas", []): dip_rows.append(
-        {"id": user_id, "title": d.get("title", "Inconnu"), "level": d.get("level", "Inconnu"),
-         "institution": d.get("institution", "Inconnu"), "source": "diploma"})
-    for e in clean_data.get("experiences", []): exp_rows.append(
-        {"id": user_id, "title": e.get("title", "Inconnu"), "company": e.get("company", "Inconnu"),
-         "duration": e.get("duration", e.get("dates", "Inconnu")), "description": e.get("description", "Inconnu"),
-         "source": "experience"})
-    for c in clean_data.get("pastCourses", []): course_rows.append(
-        {"id": user_id, "title": c.get("title", "Inconnu"), "numberOfStars": c.get("numberOfStars", np.nan),
-         "course_level": c.get("course_level", "Inconnu"),
-         "description": c.get("description", c.get("course_description", "Inconnu")),
-         "start_date": c.get("start_date", "Inconnu"), "end_date": c.get("end_date", "Inconnu"),
-         "source": "pastcourse"})
-    df_exp = pd.DataFrame(exp_rows);
-    if not df_exp.empty: df_exp["duration"] = df_exp["duration"].apply(convert_duration_to_months).fillna(0).astype(int)
-    df_course = pd.DataFrame(course_rows);
-    if not df_course.empty: df_course = calculate_duration_in_months(df_course)
-    df_all = pd.concat([pd.DataFrame(base_rows), df_exp, pd.DataFrame(dip_rows), df_course], ignore_index=True).fillna(
-        "Inconnu")
-    if "numberOfStars" not in df_all.columns: df_all["numberOfStars"] = np.nan
-    df_all["numberOfStars"] = pd.to_numeric(df_all["numberOfStars"], errors='coerce')
-    mask_dip = df_all["source"] == "diploma";
-    df_all["diplome_coef"] = np.nan
-    if mask_dip.any(): df_all.loc[mask_dip, "diplome_coef"] = df_all.loc[mask_dip, "level"].apply(get_diplome_coef)
-    df_all['diplome_coef'] = pd.to_numeric(df_all['diplome_coef'], errors='coerce').fillna(0)
-    nombre_exp = (df_all["source"] == "experience").sum();
-    nb_cours = (df_all["source"] == "pastcourse").sum();
-    moyenne_notes = df_all["numberOfStars"].mean()
-    if 'duration' not in df_all.columns: df_all['duration'] = 0
-    total_duration = df_all[df_all["source"] == 'experience']['duration'].sum();
-    max_diplome_coef = df_all["diplome_coef"].max()
-    df_features = pd.DataFrame([{"nombre_experiences": nombre_exp, "nb_cours": nb_cours, "moyenne_notes": moyenne_notes,
-                                 "total_duration": total_duration, "max_diplome_coef": max_diplome_coef}]).fillna(0)
-    coef_exp, coef_cours, coef_stars = 0.3, 0.3, 0.4
-    df_features["score_reputation"] = ((coef_exp * (df_features["nombre_experiences"] / max(nombre_exp, 1))) + (
-                coef_cours * (df_features["nb_cours"] / max(nb_cours, 1))) + (
-                                                   coef_stars * (df_features["moyenne_notes"] / 5))) * 100
-    df_features = df_features.fillna(0)
-
-
-    pipeline_input = {}
+    text_cols = [
+        'description',
+        'city',
+        'title',
+        'level',
+        'company',
+        'institution',
+        'course_level'
+    ]
+    text_input = ' '.join(
+        ' '.join(df_all[col].astype(str).fillna('')) for col in text_cols if col in df_all.columns
+    )
+    X_text = tfidf.transform([nettoyer_texte(text_input)])
 
     features_row = df_features.iloc[0]
-    pipeline_input['duration'] = features_row['total_duration']
-    pipeline_input['nombre_experiences'] = features_row['nombre_experiences']
-    pipeline_input['nb_cours'] = features_row['nb_cours']
-    pipeline_input['moyenne_notes'] = features_row['moyenne_notes']
-    pipeline_input['score_reputation'] = features_row['score_reputation']
-    pipeline_input['diplome_coef'] = max_diplome_coef  # Utiliser la valeur max calculée
 
-    text_and_cat_cols = [
-        'description', 'city', 'title', 'level', 'company',
-        'institution', 'course_code', 'course_level'
-    ]
-    for col in text_and_cat_cols:
-        if col in df_all.columns:
-            pipeline_input[col] = ' '.join(df_all[col].dropna().astype(str))
-        else:
-            pipeline_input[col] = 'Inconnu'
+    def safe_float(value):
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            return 0.0
 
-    input_df = pd.DataFrame([pipeline_input])
+    X_num_array = np.array([[
+        safe_float(features_row['total_duration']),
+        safe_float(features_row['nombre_experiences']),
+        safe_float(features_row['nb_cours']),
+        safe_float(features_row['moyenne_notes']),
+        safe_float(features_row['score_reputation']),
+    ]])
 
-    prediction = pipeline.predict(input_df)[0]
+    X_num = csr_matrix(X_num_array)
+    X_final = hstack([X_text, X_num])
 
+    # === Make Prediction ===
+    prediction = model.predict(X_final)[0]
     return {"gradeAverage": round(float(prediction), 2)}
